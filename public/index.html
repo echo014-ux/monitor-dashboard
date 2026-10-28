@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>主机环境监控 · Echo</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --bg-grid: rgba(255,255,255,0.025);
+    --surface: #141923;
+    --surface-2: #1a2030;
+    --panel-border: #232b3a;
+    --text: #e6ebf2;
+    --text-2: #9ba6b8;
+    --text-3: #6b7689;
+    --ok: #2fd47e;   --ok-bg: rgba(47,212,126,0.14);
+    --warn: #f5a524; --warn-bg: rgba(245,165,36,0.15);
+    --down: #ff5d5d; --down-bg: rgba(255,93,93,0.16);
+    --l1: #4ea1ff; --l2: #b48ce0; --l3: #2dd4bf;
+    --a: #b48ce0; --d: #2dd4bf; --t: #4ea1ff; --g: #f5a524; --c: #8b5cf6; --k: #f43f5e;
+    --grid-line: rgba(255,255,255,0.06);
+    --shadow: 0 8px 24px rgba(0,0,0,0.40);
+  }
+  [data-theme="light"] {
+    --bg: #eef1f6;
+    --bg-grid: rgba(20,30,50,0.025);
+    --surface: #ffffff;
+    --surface-2: #f4f7fb;
+    --panel-border: #dde3ec;
+    --text: #1d2330;
+    --text-2: #5b6473;
+    --text-3: #8a93a3;
+    --ok: #15a06a;   --ok-bg: rgba(21,160,106,0.12);
+    --warn: #b9750a; --warn-bg: rgba(185,117,10,0.13);
+    --down: #d23a3a; --down-bg: rgba(210,58,58,0.12);
+    --l1: #185fa5; --l2: #7a3fb5; --l3: #0f9d8a;
+    --a: #7a3fb5; --d: #0f9d8a; --t: #185fa5; --g: #b9750a; --c: #6d28d9; --k: #be123c;
+    --grid-line: rgba(20,30,50,0.07);
+    --shadow: 0 8px 24px rgba(20,30,50,0.08);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Consolas", monospace;
+    color: var(--text);
+    background-color: var(--bg);
+    background-image:
+      linear-gradient(var(--bg-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+    background-size: 32px 32px;
+    min-height: 100vh;
+    padding: 20px clamp(14px, 3.5vw, 40px) 34px;
+    transition: background-color 0.5s ease, color 0.4s ease;
+  }
+  .app { max-width: 1320px; margin: 0 auto; }
+
+  /* ---- 顶栏 ---- */
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .live { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 var(--ok-bg); animation: pulse 2.2s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 var(--ok-bg);} 70%{box-shadow:0 0 0 9px transparent;} 100%{box-shadow:0 0 0 0 transparent;} }
+  h1 { font-size: 17px; font-weight: 650; letter-spacing: 0.3px; }
+  .sub { font-size: 11.5px; color: var(--text-3); margin-left: 1px; }
+  .meta { display: flex; align-items: center; gap: 12px; }
+  #clock { font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+  #themeBtn {
+    background: var(--surface); color: var(--text); border: 1px solid var(--panel-border);
+    padding: 6px 13px; border-radius: 8px; font-size: 12.5px; cursor: pointer;
+    transition: transform 0.25s cubic-bezier(0.16,1,0.3,1), background 0.3s, border-color 0.3s;
+  }
+  #themeBtn:hover { transform: translateY(-1px); border-color: var(--l1); }
+
+  /* ---- 健康横幅 + 依赖拓扑 ---- */
+  .banner {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    background: var(--surface); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 14px 18px; box-shadow: var(--shadow); margin-bottom: 18px; position: relative; overflow: hidden;
+    transition: border-color 0.4s;
+  }
+  .banner::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background: var(--ok); transition: background 0.4s; }
+  .banner.degraded::before { background: var(--warn); }
+  .banner.incident::before, .banner.critical::before { background: var(--down); }
+  .banner .badge { font-size: 20px; font-weight: 750; letter-spacing: 1.5px; }
+  .banner.healthy .badge { color: var(--ok); }
+  .banner.degraded .badge { color: var(--warn); }
+  .banner.incident .badge, .banner.critical .badge { color: var(--down); }
+  .banner .msg { font-size: 12.5px; color: var(--text-2); max-width: 460px; line-height: 1.45; }
+  .chain { display: flex; align-items: center; gap: 0; margin-left: auto; flex-wrap: wrap; }
+  .chain .node { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 13px; border-radius: 9px; font-size: 11.5px; border: 1px solid var(--panel-border); background: var(--surface-2); }
+  .chain .node .n { font-weight: 650; font-size: 12px; }
+  .chain .node .s { font-size: 10px; font-variant-numeric: tabular-nums; color: var(--text-3); }
+  .chain .node.ok { border-color: var(--ok); color: var(--ok); }
+  .chain .node.warn { border-color: var(--warn); color: var(--warn); }
+  .chain .node.down { border-color: var(--down); color: var(--down); }
+  .chain .arrow { color: var(--text-3); font-size: 15px; padding: 0 7px; }
+
+  /* ---- 层 ---- */
+  .layer { margin-bottom: 16px; }
+  .layer-h { display: flex; align-items: center; gap: 10px; margin: 0 2px 10px; }
+  .layer-h .idx { width: 25px; height: 25px; border-radius: 7px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12.5px; color: #fff; }
+  .layer-h .t { font-size: 14px; font-weight: 650; }
+  .layer-h .d { font-size: 11px; color: var(--text-3); }
+  .l1 .idx { background: var(--l1); }
+  .l2 .idx { background: var(--l2); }
+  .l3 .idx { background: var(--l3); }
+
+  /* ---- 面板（Grafana 风格 stat+spark）---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(218px, 1fr)); gap: 12px; }
+  .l2-wrap { display: flex; flex-direction: column; gap: 14px; }
+  .l2-wrap .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(218px, 1fr)); gap: 12px; }
+  .group {
+    background: var(--surface-2); border: 1px solid var(--panel-border); border-radius: 12px;
+    padding: 12px 14px 14px; box-shadow: var(--shadow);
+  }
+  .group h3 {
+    font-size: 12px; font-weight: 650; color: var(--text-2); margin: 0 0 10px 2px;
+    letter-spacing: 0.3px; display: flex; align-items: center; gap: 8px;
+  }
+  .group h3 .tag { font-size: 10px; font-weight: 650; padding: 1px 7px; border-radius: 20px; }
+  .group h3 .tag.proxy { background: rgba(180,140,224,0.14); color: #b48ce0; }
+  .group h3 .tag.direct { background: var(--ok-bg); color: var(--ok); }
+  .panel {
+    background: var(--surface); border: 1px solid var(--panel-border); border-radius: 10px;
+    padding: 13px 15px 11px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+    transition: transform 0.28s cubic-bezier(0.16,1,0.3,1), border-color 0.3s;
+  }
+  .panel::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background: var(--panel-border); transition: background 0.3s; }
+  .panel.ok::before { background: var(--ok); }
+  .panel.warn::before { background: var(--warn); }
+  .panel.down::before { background: var(--down); }
+  .panel:hover { transform: translateY(-2px); border-color: var(--text-3); }
+  .p-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .p-title { font-size: 11.5px; color: var(--text-2); font-weight: 550; letter-spacing: 0.2px; text-transform: uppercase; }
+  .p-pill { font-size: 10px; font-weight: 650; padding: 1px 8px; border-radius: 20px; }
+  .p-pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .p-pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .p-pill.down { background: var(--down-bg); color: var(--down); }
+  .p-stat { font-size: 25px; font-weight: 680; margin: 9px 0 2px; letter-spacing: 0.3px; font-variant-numeric: tabular-nums; line-height: 1; }
+  .p-stat .unit { font-size: 13px; font-weight: 500; color: var(--text-2); margin-left: 2px; }
+  .panel.ok .p-stat { color: var(--ok); }
+  .panel.warn .p-stat { color: var(--warn); }
+  .panel.down .p-stat { color: var(--down); }
+  .panel:not(.ok):not(.warn):not(.down) .p-stat { color: var(--text); }
+  .p-bar { height: 5px; border-radius: 4px; background: var(--surface-2); overflow: hidden; margin: 7px 0 4px; border: 1px solid var(--panel-border); }
+  .p-bar > i { display: block; height: 100%; border-radius: 4px; transition: width 0.6s cubic-bezier(0.16,1,0.3,1); }
+  .p-bar > i.ok { background: var(--ok); }
+  .p-bar > i.warn { background: var(--warn); }
+  .p-bar > i.down { background: var(--down); }
+  .p-bar > i.mute { background: var(--text-3); }
+  .spark { width: 100%; height: 36px; display: block; margin-top: 4px; }
+  .p-foot { font-size: 10.5px; color: var(--text-3); line-height: 1.4; margin-top: 3px; }
+  .p-foot a { color: var(--l1); text-decoration: none; }
+  .p-foot a:hover { text-decoration: underline; }
+
+  /* ---- 底部：主图 + 事件 ---- */
+  .bottom { display: grid; grid-template-columns: 1.7fr 1fr; gap: 14px; margin-top: 4px; }
+  @media (max-width: 860px) { .bottom { grid-template-columns: 1fr; } .chain { margin-left: 0; width: 100%; } }
+  .box { background: var(--surface); border: 1px solid var(--panel-border); border-radius: 12px; padding: 15px 17px; box-shadow: var(--shadow); }
+  .box h2 { font-size: 13px; font-weight: 650; margin-bottom: 11px; display: flex; align-items: baseline; gap: 8px; }
+  .box h2 .hint { font-size: 10.5px; color: var(--text-3); font-weight: 400; }
+  .chart-wrap { position: relative; height: 240px; }
+  .events { list-style: none; display: flex; flex-direction: column; gap: 7px; max-height: 256px; overflow-y: auto; }
+  .events li { font-size: 12px; display: flex; gap: 9px; align-items: baseline; padding: 6px 9px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--panel-border); }
+  .events .tag { font-size: 9.5px; font-weight: 650; padding: 1px 6px; border-radius: 5px; flex: none; }
+  .events .tag.P0 { background: var(--down-bg); color: var(--down); }
+  .events .tag.P1 { background: var(--warn-bg); color: var(--warn); }
+  .events .tag.OK { background: var(--ok-bg); color: var(--ok); }
+  .events .msg { color: var(--text); }
+  .events .time { color: var(--text-3); font-size: 10.5px; margin-left: auto; flex: none; font-variant-numeric: tabular-nums; }
+  .events .empty { color: var(--text-3); font-size: 12px; padding: 8px 4px; }
+  footer { margin-top: 20px; font-size: 11px; color: var(--text-3); text-align: center; line-height: 1.7; }
+
+  /* ---- 守护进程健康徽标（右下角常驻）---- */
+  .proc-badge {
+    position: fixed; right: 14px; bottom: 12px; z-index: 50;
+    display: flex; align-items: center; gap: 8px;
+    background: var(--surface); border: 1px solid var(--panel-border);
+    border-radius: 22px; padding: 6px 13px; box-shadow: var(--shadow);
+    font-size: 11.5px; color: var(--text-2); font-variant-numeric: tabular-nums;
+    user-select: none;
+  }
+  .proc-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 var(--ok-bg); flex: none; }
+  .proc-badge .v { color: var(--text); font-weight: 600; }
+  .proc-badge .sep { color: var(--text-3); }
+  .proc-badge.down .dot { background: var(--down); }
+  .proc-badge.flash { animation: procflash 1.3s ease; }
+  @keyframes procflash { 0%{ border-color: var(--warn); background: var(--warn-bg); } 100%{ border-color: var(--panel-border); background: var(--surface); } }
+  @media (max-width: 860px) { .proc-badge { font-size: 10.5px; padding: 5px 10px; bottom: 8px; right: 8px; } }
+
+  /* ---- Claude 纪律提醒卡（信息提醒，静态）---- */
+  .reminder {
+    background: var(--surface); border: 1px solid var(--panel-border);
+    border-left: 4px solid var(--warn); border-radius: 12px;
+    padding: 14px 18px 15px; box-shadow: var(--shadow);
+  }
+  .reminder-head { font-size: 13.5px; font-weight: 680; color: var(--warn); margin-bottom: 11px; display: flex; align-items: center; gap: 7px; letter-spacing: .3px; }
+  .reminder-list { list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+  .reminder-list li { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--panel-border); border-radius: 10px; }
+  .reminder-list li b { color: var(--text); font-weight: 660; font-size: 13px; }
+  .reminder-list li span { color: var(--text-2); font-size: 11.5px; line-height: 1.5; }
+  .reminder-foot { margin-top: 12px; font-size: 11px; color: var(--text-3); border-top: 1px dashed var(--panel-border); padding-top: 10px; line-height: 1.5; }
+  /* 纪律提醒作为 Claude 合规网格的第 7 项，跨满右侧空列（与 浏览器硬化清单 同行） */
+  .reminder.rem-span { grid-column: 2 / -1; }
+  @media (max-width: 700px) { .reminder.rem-span { grid-column: auto; } }
+</style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="brand">
+        <span class="live"></span>
+        <h1>主机环境监控</h1>
+        <span class="sub">Echo · 环境把关 / aquantCC 支撑</span>
+      </div>
+      <div class="meta">
+        <span id="clock">--:--:--</span>
+        <button id="themeBtn">切换主题</button>
+      </div>
+    </header>
+
+    <div class="banner healthy" id="banner">
+      <div>
+        <div class="badge" id="ovBadge">健康</div>
+        <div class="msg" id="ovMsg">三层全部正常</div>
+      </div>
+      <div class="chain" id="chain"></div>
+    </div>
+
+    <section class="layer l1">
+      <div class="layer-h"><span class="idx">L1</span><span class="t">主机硬件</span><span class="d">基础层 · 代理进程与量化服务都跑在它之上</span></div>
+      <div class="grid" id="l1"></div>
+    </section>
+
+    <section class="layer l2">
+      <div class="layer-h"><span class="idx">L2</span><span class="t">网络 / VPS 隧道</span><span class="d">依赖层 · 出口断则 LLM / 数据 / push 全失效</span></div>
+      <div class="l2-wrap" id="l2"></div>
+    </section>
+
+    <section class="layer l3">
+      <div class="layer-h"><span class="idx">L3</span><span class="t">量化应用</span><span class="d">顶层 · 依赖 L2 出口与 L1 主机</span></div>
+      <div class="grid" id="l3"></div>
+    </section>
+
+    <section class="layer l3">
+      <div class="layer-h"><span class="idx">L3</span><span class="t">Claude 合规</span><span class="d">封号规避条件 + 行为纪律 · 依赖 L2 出口 + 浏览器侧伪装（10-23 / 10-25）</span></div>
+      <div class="grid" id="l3c"></div>
+    </section>
+
+    <section class="bottom">
+      <div class="box">
+        <h2>关键端点延迟趋势 <span class="hint">Anthropic/Codex/GitHub 经代理 10808 → 东京出口 · DeepSeek/Kimi/Tushare 本地直连 · 每 15s</span></h2>
+        <div class="chart-wrap"><canvas id="trend"></canvas></div>
+      </div>
+      <div class="box">
+        <h2>事件流 <span class="hint">最新在上</span></h2>
+        <ul class="events" id="events"><li class="empty">暂无事件</li></ul>
+      </div>
+    </section>
+
+    <footer>
+      数据源：Node 进程内实时（CPU）· collect_extra.ps1（内存/GPU/NPU/磁盘/出口延迟）· proxy_keepalive / host_health 心跳 · 浏览器级隐私检查（IP/WebRTC/DNS）｜ 端口 7890 ｜ 代理自愈 ProxyKeepalive 已启用
+    </footer>
+  </div>
+
+  <div class="proc-badge" id="procBadge">
+    <span class="dot"></span>
+    <span>守护进程</span>
+    <span class="sep">·</span>
+    <span class="v" id="procUptime">—</span>
+    <span class="sep">·</span>
+    <span id="procBoot">启动 —</span>
+    <span class="sep">·</span>
+    <span class="v" id="procPid">PID —</span>
+  </div>
+
+<script>
+  const root = document.documentElement;
+  const saved = localStorage.getItem('monitor-theme') || 'dark';
+  root.setAttribute('data-theme', saved);
+  document.getElementById('themeBtn').addEventListener('click', () => {
+    const next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    root.setAttribute('data-theme', next);
+    localStorage.setItem('monitor-theme', next);
+    applyChartTheme();
+  });
+
+  function tick(){ const d = new Date(); document.getElementById('clock').textContent = d.toLocaleTimeString('zh-CN', {hour12:false}); }
+  tick(); setInterval(tick, 1000);
+
+  const pctClass = p => p >= 90 ? 'down' : (p >= 75 ? 'warn' : 'ok');
+  const stColor = s => getComputedStyle(root).getPropertyValue(s === 'down' ? '--down' : s === 'warn' ? '--warn' : '--ok').trim();
+  const C = { a:'#b48ce0', c:'#8b5cf6', d:'#2dd4bf', k:'#f43f5e', t:'#4ea1ff', g:'#f5a524' };  // 端点固定色（明暗通用）
+
+  // ---------- 迷你时序图（纯 SVG sparkline）----------
+  function sparkline(vals, color, w=240, h=36){
+    if (!vals || vals.length < 2) return '<svg class="spark" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none"></svg>';
+    const data = vals.filter(v => v != null);
+    if (data.length < 2) return '<svg class="spark" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none"></svg>';
+    const min = Math.min(...data), max = Math.max(...data), range = (max - min) || 1, n = vals.length;
+    const coords = vals.map((v,i) => v == null ? null : { x:(i/(n-1))*w, y: h-3 - ((v-min)/range)*(h-6) }).filter(Boolean);
+    if (coords.length < 2) return '<svg class="spark" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none"></svg>';
+    const line = 'M' + coords.map(p => p.x.toFixed(1)+','+p.y.toFixed(1)).join(' L');
+    const area = line + ' L'+coords[coords.length-1].x.toFixed(1)+','+h+' L'+coords[0].x.toFixed(1)+','+h+' Z';
+    const id = 'sg'+Math.random().toString(36).slice(2,8);
+    return '<svg class="spark" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none">'
+      + '<defs><linearGradient id="'+id+'" x1="0" y1="0" x2="0" y2="1">'
+      + '<stop offset="0%" stop-color="'+color+'" stop-opacity="0.30"/>'
+      + '<stop offset="100%" stop-color="'+color+'" stop-opacity="0"/></linearGradient></defs>'
+      + '<path d="'+area+'" fill="url(#'+id+')"/>'
+      + '<path d="'+line+'" fill="none" stroke="'+color+'" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>'
+      + '</svg>';
+  }
+
+  // ---------- 面板构造 ----------
+  function panel(o){
+    const bar = (o.barPct != null) ? '<div class="p-bar"><i class="'+(o.cls==='ok'||o.cls==='warn'||o.cls==='down'?o.cls:'mute')+'" style="width:'+Math.max(0,Math.min(100,o.barPct))+'%"></i></div>' : '';
+    const spark = (o.sparkVals && o.sparkVals.length) ? '<div class="p-spark">'+sparkline(o.sparkVals, o.sparkColor||stColor(o.cls), 240, 36)+'</div>' : '';
+    return '<div class="panel '+o.cls+'">'
+      + '<div class="p-head"><span class="p-title">'+o.title+'</span>'
+      + (o.pill ? '<span class="p-pill '+o.cls+'">'+o.pill+'</span>' : '') + '</div>'
+      + '<div class="p-stat">'+o.stat+(o.unit?'<span class="unit">'+o.unit+'</span>':'')+'</div>'
+      + bar + spark
+      + (o.foot ? '<div class="p-foot">'+o.foot+'</div>' : '')
+      + '</div>';
+  }
+
+  // ---------- 渲染 ----------
+  function renderBanner(s){
+    if (!s || !s.layers) {
+      document.getElementById('banner').className = 'banner critical';
+      document.getElementById('ovBadge').textContent = '离线';
+      document.getElementById('ovMsg').textContent = 'state 结构异常（等待采样）';
+      return;
+    }
+    const b = document.getElementById('banner');
+    b.className = 'banner ' + s.overall;
+    document.getElementById('ovBadge').textContent =
+      s.overall === 'healthy' ? '健康' : s.overall === 'degraded' ? '降级' : s.overall === 'critical' ? '故障' : '异常';
+    document.getElementById('ovMsg').textContent = s.overallMsg;
+    const L = s.layers;
+    const hostCls = L.host.degraded ? 'warn' : 'ok';
+    const netCls  = (L.network.proxyListen && L.network.egressOk) ? 'ok' : 'down';
+    const eff = L.app.effective;
+    const appCls = L.app.scheduler.httpOk ? (eff ? 'ok' : 'warn') : 'down';
+    const node = (cls, n, st) => '<div class="node '+cls+'"><span class="n">'+n+'</span><span class="s">'+st+'</span></div>';
+    document.getElementById('chain').innerHTML =
+      node(hostCls, 'L1 主机', L.host.degraded ? '资源紧张' : '正常')
+      + '<span class="arrow">›</span>'
+      + node(netCls, 'L2 网络', (L.network.proxyListen && L.network.egressOk) ? '出口通' : '出口断')
+      + '<span class="arrow">›</span>'
+      + node(appCls, 'L3 量化', eff ? '有效' : (L.app.scheduler.httpOk ? '出口断' : '异常'));
+  }
+
+  function renderL1(L, series){
+    if (!L || !L.host) { document.getElementById('l1').innerHTML = panel({ cls:'down', title:'L1 主机', stat:'结构缺失', foot:'等待 /api/state 返回正常数据' }); return; }
+    const h = L.host; const cards = [];
+    // CPU（实时）
+    const cpu = h.cpu; const cpuCls = pctClass(cpu);
+    cards.push(panel({ cls: cpuCls, title: 'CPU 负载', pill: cpuCls==='down'?'高':cpuCls==='warn'?'偏高':'正常',
+      stat: cpu.toFixed(1), unit: '%', barPct: cpu, sparkVals: series.map(p=>p.cpu), sparkColor: stColor(cpuCls),
+      foot: 'AMD Ryzen AI 9 HX 370 · 24 核' }));
+    // 内存
+    if (h.mem.pct == null){
+      cards.push(panel({ cls:'', title:'内存', stat:'采集未运行', foot:'启用 EnvMetrics 计划任务后显示（含缓存的真实可用）' }));
+    } else {
+      const m = h.mem; const mCls = pctClass(m.pct);
+      cards.push(panel({ cls: mCls, title:'内存', pill: mCls==='down'?'紧张':mCls==='warn'?'偏高':'正常',
+        stat: m.pct.toFixed(1), unit:'%', barPct: m.pct, sparkVals: series.map(p=>p.mem), sparkColor: stColor(mCls),
+        foot: '已用 '+m.used+' / '+m.total+' GB · 可用 '+m.avail+'GB'+(m.standby!=null?' · 待机 '+m.standby+'GB':'') }));
+    }
+    // GPU
+    if (h.gpu.avail){
+      const g = h.gpu.pct==null?0:h.gpu.pct; const gCls = pctClass(g);
+      cards.push(panel({ cls: gCls, title:'GPU', pill: gCls==='down'?'高':gCls==='warn'?'偏高':'正常',
+        stat: h.gpu.pct==null?'—':h.gpu.pct.toFixed(1), unit:'%', barPct: g, sparkVals: series.map(p=>p.gpu), sparkColor: stColor(gCls),
+        foot: h.gpu.name||'AMD Radeon 890M' }));
+    } else {
+      cards.push(panel({ cls:'', title:'GPU', stat:'采集未运行', foot:(h.gpu.name||'AMD Radeon 890M')+' · 启用 EnvMetrics 任务后显示' }));
+    }
+    // NPU
+    if (h.npu.avail){
+      const n = h.npu.pct==null?0:h.npu.pct; const nCls = pctClass(n);
+      cards.push(panel({ cls: nCls, title:'NPU', pill: nCls==='down'?'高':nCls==='warn'?'偏高':'正常',
+        stat: h.npu.pct==null?'—':h.npu.pct.toFixed(1), unit:'%', barPct: n, sparkColor: stColor(nCls),
+        foot: h.npu.name||'Ryzen AI NPU' }));
+    } else {
+      cards.push(panel({ cls:'', title:'NPU', stat:'未暴露', foot: h.npu.name+' · 驱动未提供性能计数器' }));
+    }
+    // 磁盘
+    if (!h.disk.length){
+      cards.push(panel({ cls:'', title:'磁盘', stat:'采集未运行', foot:'启用 EnvMetrics 计划任务后显示' }));
+    } else {
+      for (const d of h.disk){
+        const dCls = pctClass(d.pct);
+        cards.push(panel({ cls: dCls, title:'磁盘 '+d.drive, pill: dCls==='down'?'满':dCls==='warn'?'偏高':'正常',
+          stat: d.pct, unit:'%', barPct: d.pct, foot: '可用 '+d.free+' / '+d.total+' GB' }));
+      }
+    }
+    document.getElementById('l1').innerHTML = cards.join('');
+  }
+
+  function renderL2(L, series){
+    if (!L || !L.network) { document.getElementById('l2').innerHTML = '<div class="grid">' + panel({ cls:'down', title:'L2 网络', stat:'结构缺失', foot:'等待 /api/state 返回正常数据' }) + '</div>'; return; }
+    const n = L.network;
+    // 基础：代理 + 东京出口
+    const base = [
+      panel({ cls: n.proxyListen?'ok':'down', title:'代理 10808', pill: n.proxyListen?'在线':'离线',
+        stat: n.proxyListen?'● 在线':'● 离线', foot:'隧道入口 · 监听 127.0.0.1:10808' }),
+      panel({ cls: n.egressOk?'ok':'down', title:'东京出口 egress', pill: n.egressOk?'通':'断',
+        stat: n.egressOk?'通':'断', foot: n.exit.ip+':'+n.exit.port+' · '+n.exit.geo+(n.proxyTs?' · 心跳 '+n.proxyTs:'') })
+    ];
+    const latMap = {}; (n.latency||[]).forEach(x => latMap[x.name] = x);
+    const seriesLat = { a: series.map(p=>p.lat?p.lat.a:null), c: series.map(p=>p.lat?p.lat.c:null), d: series.map(p=>p.lat?p.lat.d:null), k: series.map(p=>p.lat?p.lat.k:null), t: series.map(p=>p.lat?p.lat.t:null), g: series.map(p=>p.lat?p.lat.g:null) };
+    function endpointPanel(e){
+      const cur = latMap[e.name]; const ok = cur && cur.ok; const ms = ok ? cur.ms : null;
+      const via = cur && cur.via ? cur.via : 'proxy';
+      const cls = !ok ? 'down' : (ms>400 ? 'warn' : 'ok');
+      const footVia = via === 'direct' ? '本地直连' : '经 10808 → 东京出口';
+      return panel({ cls, title: e.name, pill: !ok?'超时':(ms>400?'偏慢':'正常'),
+        stat: ok ? ms+' ' : '超时', unit: ok?'ms':'', barPct: ok?Math.min(100, ms/8):null,
+        sparkVals: seriesLat[e.key], sparkColor: e.color, foot: footVia });
+    }
+    const abroad = [
+      { key:'a', name:'Anthropic', color:C.a },
+      { key:'c', name:'Codex',     color:C.c },
+      { key:'g', name:'GitHub',    color:C.g }
+    ];
+    const domestic = [
+      { key:'d', name:'DeepSeek',  color:C.d },
+      { key:'k', name:'Kimi',      color:C.k },
+      { key:'t', name:'Tushare',   color:C.t }
+    ];
+    let html = '<div class="grid">' + base.join('') + '</div>';
+    html += '<div class="group" id="privacy-check"><h3>网络隐私检查 <span class="tag proxy">浏览器级</span></h3><div class="grid" id="privacy-panels"></div><div class="p-foot" style="margin-top:8px;">基于浏览器当前代理环境实时检测 · 60s 刷新 · IP / WebRTC / DNS 任一跳变会写入事件流</div></div>';
+    if ((n.latency||[]).length) {
+      html += '<div class="group"><h3>国外服务 <span class="tag proxy">经 10808 → 东京出口</span></h3><div class="grid">' + abroad.map(endpointPanel).join('') + '</div></div>';
+      html += '<div class="group"><h3>国内服务 <span class="tag direct">本地直连</span></h3><div class="grid">' + domestic.map(endpointPanel).join('') + '</div></div>';
+    } else {
+      html += '<div class="group"><h3>端点延迟</h3><div class="grid">' + panel({ cls:'', title:'出口延迟', stat:'采集未运行', foot:'启用 EnvMetrics 计划任务后显示' }) + '</div></div>';
+    }
+    document.getElementById('l2').innerHTML = html;
+    if (lastPrivacy) renderPrivacyPanel(lastPrivacy.ipInfo, lastPrivacy.webrtcIps, lastPrivacy.dnsInfo);
+  }
+
+  function renderL3(L){
+    if (!L || !L.app) { document.getElementById('l3').innerHTML = panel({ cls:'down', title:'L3 量化', stat:'结构缺失', foot:'等待 /api/state 返回正常数据' }); return; }
+    const a = L.app; const cards = [];
+    let sc='down', sv='离线', sd='调度中心不可达', pill='离线';
+    if (a.scheduler.httpOk){ sc='ok'; sv='应用存活'; pill='正常'; sd = a.effective ? '总调度中心 · LLM/数据通路正常' : '⚠ 页面可开，但出口断 → 自进化/刷新静默失败'; }
+    else if (a.scheduler.listen){ sc='warn'; sv='假活'; pill='假活'; sd='端口在听 · 但 HTTP 无响应（Flask 卡死？）'; }
+    cards.push(panel({ cls: sc, title:'调度中心 5000', pill, stat: sv,
+      foot: sd + (a.scheduler.httpOk ? ' · <a href="'+a.scheduler.url+'" target="_blank">打开 runtime-scheduler</a>' : '') }));
+    cards.push(panel({ cls: a.pg.listen?'ok':'down', title:'PostgreSQL 5434', pill: a.pg.listen?'在线':'离线',
+      stat: a.pg.listen?'● 在线':'● 离线', foot:'quantdinger 库 · 量化数据 backend' }));
+    document.getElementById('l3').innerHTML = cards.join('');
+  }
+
+  function renderL3c(L){
+    const el = document.getElementById('l3c');
+    if (!L || !L.claude) {
+      el.innerHTML = panel({ cls:'down', title:'Claude 合规', stat:'数据未就绪', foot:'后端需重启以启用 claude 合规块（跑 switch_task_hidden.ps1）' });
+      return;
+    }
+    const c = L.claude; const cards = [];
+    // 1) 出口 IP 归属
+    const exit = c.exit || {};
+    cards.push(panel({ cls: c.exitOk ? 'ok' : 'down', title:'出口 IP 归属', pill: c.exitOk ? '合规' : '风险',
+      stat: (exit.ip || '—') + ' · ' + (exit.geo || '未知'),
+      foot: c.exitOk ? (exit.geo + ' 固定出口 · 非中国 IP，账号区域一致性达标') : '出口 IP 偏离日本锚点 → 高风险，检查隧道' }));
+    // 2) 代理通道
+    const chanOk = c.egressOk && c.proxyListen;
+    cards.push(panel({ cls: chanOk ? 'ok' : 'down', title:'代理通道 10808', pill: chanOk ? '在线' : '断开',
+      stat: (c.proxyListen ? '● 10808 监听' : '× 10808 未监听') + ' · egress ' + (c.egressOk ? 'OK' : 'FAIL'),
+      foot: 'IP 频繁切换/地理跳变会触发风控 · ProxyKeepalive 每分钟自愈中' }));
+    // 3) Anthropic 通路
+    const ant = c.anthropic || {};
+    cards.push(panel({ cls: ant.ok ? 'ok' : (ant.ok === false ? 'warn' : ''), title:'Anthropic 通路', pill: ant.ok ? '可达' : (ant.ok === false ? '异常' : '—'),
+      stat: ant.ok ? ('● api.anthropic.com ' + (ant.ms != null ? ant.ms + 'ms · 经代理' : '可达 · 经代理')) : (ant.ok === false ? '× api.anthropic.com 不可达' : '延迟采集中…'),
+      foot: '经 10808 隧道访问 Anthropic API 的可达性与延迟' }));
+    // 4) 隧道 DNS 解析器（经 10808 代理流量真实路径）
+    const d = c.dns || {};
+    const dnsCls = d.cnLeak == null ? '' : (d.cnLeak ? 'down' : 'ok');
+    const dnsStat = d.err ? ('探针失败 · ' + d.err) : (d.ip ? (d.ip + ' · ' + (d.geo || '')) : '探测中…');
+    cards.push(panel({ cls: dnsCls, title:'隧道 DNS（代理）', pill: d.cnLeak == null ? '—' : (d.cnLeak ? '隧道泄漏' : '非中国'),
+      stat: dnsStat,
+      foot: d.cnLeak
+        ? '代理流量经中国解析器暴露位置 → 真·泄漏，检查 xray 远程DNS配置'
+        : '经 10808 隧道远程DNS解析，解析器不在中国，Claude 流量无暴露（注：直连本就上不了 Claude，不做泄漏判定）' }));
+    // 5) 浏览器时区（浏览器侧实测，Spoof Timezone 生效则显示 Asia/Tokyo）
+    let tzName = '未知', tzOk = false, tzOff = '';
+    try {
+      tzName = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const m = -new Date().getTimezoneOffset();
+      tzOff = 'UTC' + (m >= 0 ? '+' : '-') + String(Math.floor(Math.abs(m)/60)).padStart(2,'0') + ':' + String(Math.abs(m)%60).padStart(2,'0');
+      tzOk = /tokyo/i.test(tzName);
+    } catch (e) {}
+    cards.push(panel({ cls: tzOk ? 'ok' : 'warn', title:'浏览器时区', pill: tzOk ? '已伪装' : '未伪装',
+      stat: tzName + ' (' + tzOff + ')',
+      foot: tzOk ? 'Spoof Timezone 生效 · 与日本出口零时差' : '启用 Spoof Timezone 扩展锁 Asia/Tokyo；CLI 用 claude-tokyo.cmd 启动' }));
+    // 6) 浏览器硬化清单（备忘项，服务端无法校验浏览器内部状态）
+    cards.push(panel({ cls:'ok', title:'浏览器硬化清单', pill:'已配置',
+      stat:'时区伪装 ✓ · WebRTC 关闭 ✓ · SOCKS5 远程 DNS ✓',
+      foot:'10-23 配置完毕 · 浏览器内部状态服务端不可校验，仅作备忘' }));
+    // 7) 纪律提醒：作为本网格第 7 项，跨满右侧空列（与「浏览器硬化清单」同行），不另起一行
+    el.innerHTML = cards.join('') + (
+      '<div class="reminder rem-span">'
+      + '<div class="reminder-head">⚠ Claude 使用三条行为纪律</div>'
+      + '<ul class="reminder-list">'
+      + '<li><b>① 充完就等，别登出</b><span>付款后死等到账，绝不退登重登（本次封号即由此触发）。</span></li>'
+      + '<li><b>② 时区/时段自洽</b><span>浏览器时区钉死=代理出口（日本）；作息像单时区真人，别乱跳、别昼夜颠倒像 bot。</span></li>'
+      + '<li><b>③ 一账号一客户端</b><span>不共享、不多地同时登录、不把号分发给别人。</span></li>'
+      + '</ul>'
+      + '<div class="reminder-foot">物理在长沙的地域事实改不了，残余风险常在。三条纪律是「降风险」，不是「免死金牌」。<b>证件红线：中国证件 / 假日本证件都别交。</b><br>启动方式：终端 CLI → <code>claude-tokyo.cmd</code>；VS Code 插件 → <code>code-tokyo.cmd</code>（均钉日本代理 10808 + 东京时区）。勿直接敲 <code>claude</code> 或从开始菜单直开 VS Code。</div>'
+      + '</div>'
+    );
+  }
+
+  // ---------- 主图：关键端点延迟 ----------
+  let chart = null;
+  function buildChart(series){
+    const labels = series.map(p => new Date(p.t).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false}));
+    const grid = getComputedStyle(root).getPropertyValue('--grid-line').trim();
+    const tick = getComputedStyle(root).getPropertyValue('--text-3').trim();
+    const mk = (key,label,color) => ({
+      label, data: series.map(p => (p.lat && p.lat[key]!=null) ? p.lat[key] : null),
+      borderColor: color, backgroundColor: color+'22', borderWidth: 1.6, fill: false,
+      pointRadius: 0, tension: 0.25, spanGaps: true
+    });
+    chart = new Chart(document.getElementById('trend'), {
+      type: 'line',
+      data: { labels, datasets: [ mk('a','Anthropic',C.a), mk('c','Codex',C.c), mk('d','DeepSeek',C.d), mk('k','Kimi',C.k), mk('t','Tushare',C.t), mk('g','GitHub',C.g) ] },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: { duration: 350 },
+        interaction: { mode: 'index', intersect: false },
+        scales: {
+          y: { beginAtZero: true, ticks: { color: tick, callback: v => v+'ms' }, grid: { color: grid } },
+          x: { ticks: { color: tick, maxTicksLimit: 6, autoSkip: true }, grid: { display: false } }
+        },
+        plugins: { legend: { labels: { color: tick, boxWidth: 10, font: { size: 11 } } } }
+      }
+    });
+  }
+  function applyChartTheme(){
+    if (!chart) return;
+    const grid = getComputedStyle(root).getPropertyValue('--grid-line').trim();
+    const tick = getComputedStyle(root).getPropertyValue('--text-3').trim();
+    chart.options.scales.y.ticks.color = tick; chart.options.scales.y.grid.color = grid;
+    chart.options.scales.x.ticks.color = tick; chart.options.plugins.legend.labels.color = tick;
+    chart.update('none');
+  }
+  function updateChart(series){
+    if (!chart){ buildChart(series); return; }
+    chart.data.labels = series.map(p => new Date(p.t).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false}));
+    ['a','c','d','k','t','g'].forEach((k,i) => { chart.data.datasets[i].data = series.map(p => (p.lat && p.lat[k]!=null) ? p.lat[k] : null); });
+    chart.update('none');
+  }
+
+  let clientEvents = [];
+  let lastServerEvents = [];
+  function renderEvents(events){
+    lastServerEvents = events || [];
+    const all = [...clientEvents, ...lastServerEvents].slice(0, 40);
+    const el = document.getElementById('events');
+    if (!all.length){ el.innerHTML = '<li class="empty">暂无事件</li>'; return; }
+    el.innerHTML = all.map(line => {
+      if (typeof line === 'string') {
+        const [ts, level, msg] = line.split(' | ');
+        const t = ts ? new Date(ts).toLocaleTimeString('zh-CN',{hour12:false}) : '';
+        return '<li><span class="tag '+level+'">'+level+'</span><span class="msg">'+msg+'</span><span class="time">'+t+'</span></li>';
+      } else {
+        return '<li><span class="tag '+line.level+'">'+line.level+'</span><span class="msg">'+line.msg+'</span><span class="time">'+line.time+'</span></li>';
+      }
+    }).join('');
+  }
+
+  // ---------- 浏览器级网络隐私检查（IP / WebRTC / DNS 泄露）----------
+  let lastPrivacy = null;
+
+  function isPrivateIp(ip) {
+    return /^(127\.|0\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/
+      .test(ip);
+  }
+
+  async function fetchIpInfo() {
+    try {
+      const r = await fetch('https://api.ip.sb/geoip', { cache: 'no-store', mode: 'cors' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      return {
+        ip: j.ip || j.address || '',
+        country: j.country || j.country_code || 'Unknown',
+        countryCode: j.country_code || j.country || 'Unknown',
+        isp: j.isp || j.organization || j.org || 'Unknown',
+        city: j.city || 'Unknown'
+      };
+    } catch (e) {}
+    try {
+      const r = await fetch('https://ipinfo.io/json', { cache: 'no-store', mode: 'cors' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      return { ip: j.ip, country: j.country, countryCode: j.country, isp: j.org || j.asn, city: j.city };
+    } catch (e) {}
+    try {
+      const r = await fetch('https://api.ipify.org?format=json', { cache: 'no-store', mode: 'cors' });
+      const j = await r.json();
+      return { ip: j.ip, country: 'Unknown', countryCode: 'Unknown', isp: 'Unknown', city: 'Unknown' };
+    } catch (e) {}
+    return null;
+  }
+
+  function checkWebRTC() {
+    return new Promise((resolve) => {
+      const candidates = [];
+      let done = false;
+      let pc = null;
+      const finish = (v) => {
+        if (done) return;
+        done = true;
+        try { if (pc) pc.close(); } catch (e) {}
+        resolve(v);
+      };
+      try {
+        pc = new RTCPeerConnection({ iceServers: [] });
+        pc.onicecandidate = (e) => { if (e.candidate && e.candidate.candidate) candidates.push(e.candidate.candidate); };
+        pc.createDataChannel('');
+        pc.createOffer().then(o => pc.setLocalDescription(o)).catch(() => finish(candidates));
+        setTimeout(() => finish(candidates), 1500);
+      } catch (e) { finish([]); }
+    });
+  }
+
+  function extractPublicIps(candidates) {
+    const ips = new Set();
+    const re = /([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})/g;
+    for (const c of candidates) {
+      let m;
+      while ((m = re.exec(c)) !== null) {
+        const ip = m[1];
+        if (!isPrivateIp(ip)) ips.add(ip);
+      }
+    }
+    return Array.from(ips);
+  }
+
+  function normalizeDnsServer(s) {
+    if (typeof s === 'string') return { ip: s, hostname: s, isp: 'Unknown', country: 'Unknown' };
+    return {
+      ip: s.ip || s.address || s.server || 'Unknown',
+      hostname: s.hostname || s.host || s.name || 'Unknown',
+      isp: s.isp || s.organization || s.org || 'Unknown',
+      country: s.country || s.country_code || 'Unknown'
+    };
+  }
+
+  async function checkDnsLeak() {
+    try {
+      const r = await fetch('https://www.dnsleaktest.com/api/servers', { cache: 'no-store', mode: 'cors' });
+      if (r.ok) {
+        const data = await r.json();
+        return { ok: true, servers: (Array.isArray(data) ? data : []).map(normalizeDnsServer) };
+      }
+    } catch (e) {}
+    try {
+      const r = await fetch('https://dnsleaktest.com/api/servers', { cache: 'no-store', mode: 'cors' });
+      if (r.ok) {
+        const data = await r.json();
+        return { ok: true, servers: (Array.isArray(data) ? data : []).map(normalizeDnsServer) };
+      }
+    } catch (e) {}
+    return { ok: false, error: 'DNS 检测 API 暂不可用' };
+  }
+
+  function logPrivacyEvent(msg, level) {
+    const t = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    clientEvents.unshift({ time: t, level, msg });
+    if (clientEvents.length > 20) clientEvents.pop();
+    renderEvents(lastServerEvents);
+  }
+
+  function renderPrivacyPanel(ipInfo, webrtcIps, dnsInfo) {
+    const el = document.getElementById('privacy-panels');
+    if (!el) return;
+    const expectedIp = (L && L.claude && L.claude.expectedIp) || null;
+    const ipOk = ipInfo && expectedIp && ipInfo.ip === expectedIp;
+    const ipCls = !expectedIp ? '' : (ipInfo ? (ipOk ? 'ok' : 'warn') : 'down');
+    const ipPill = !expectedIp ? '未配置' : (ipInfo ? (ipOk ? '匹配' : '异常') : '失败');
+    const ipStat = ipInfo ? ipInfo.ip : '—';
+    const ipFoot = ipInfo
+      ? `${ipInfo.country || 'Unknown'} · ${ipInfo.isp || 'Unknown'} · ${ipInfo.city || 'Unknown'}`
+      : '检测失败';
+    const ipPanel = panel({
+      cls: ipCls, title: '出口 IP', pill: ipPill,
+      stat: ipStat, foot: ipFoot
+    });
+
+    const rtcOk = webrtcIps.length === 0;
+    const rtcCls = rtcOk ? 'ok' : 'down';
+    const rtcPill = rtcOk ? '无泄露' : '泄露';
+    const rtcStat = rtcOk ? 'No Leak' : webrtcIps.length + ' 个';
+    const rtcFoot = rtcOk
+      ? 'WebRTC 未暴露真实 IP'
+      : '暴露: ' + webrtcIps.join(', ');
+    const rtcPanel = panel({
+      cls: rtcCls, title: 'WebRTC 泄露', pill: rtcPill,
+      stat: rtcStat, foot: rtcFoot
+    });
+
+    let dnsCls = '', dnsPill = '检测中', dnsStat = '—', dnsFoot = '等待 DNS 检测';
+    if (dnsInfo) {
+      if (dnsInfo.ok) {
+        const servers = dnsInfo.servers || [];
+        const anyCn = servers.some(s => /china|telecom|unicom|mobile|cnnic/i.test((s.hostname + ' ' + s.isp + ' ' + s.country).toLowerCase()));
+        const allJp = servers.every(s => /japan|vultr|tokyo/i.test((s.hostname + ' ' + s.isp + ' ' + s.country).toLowerCase()));
+        dnsCls = anyCn ? 'down' : (allJp ? 'ok' : 'warn');
+        dnsPill = anyCn ? '泄露' : (allJp ? '正常' : '需查');
+        dnsStat = servers.length + ' 个';
+        dnsFoot = servers.slice(0, 3).map(s => s.hostname || s.ip || s.isp || 'Unknown').join(', ') + (servers.length > 3 ? '...' : '');
+      } else {
+        dnsCls = 'warn';
+        dnsPill = '失败';
+        dnsStat = '—';
+        dnsFoot = (dnsInfo.error || 'DNS 检测失败') + ' · <a href="https://dnsleaktest.com" target="_blank">手动检测</a>';
+      }
+    }
+    const dnsPanel = panel({
+      cls: dnsCls, title: 'DNS 泄露', pill: dnsPill,
+      stat: dnsStat, foot: dnsFoot
+    });
+
+    document.getElementById('privacy-panels').innerHTML = ipPanel + rtcPanel + dnsPanel;
+  }
+
+  async function runPrivacyChecks() {
+    const [ipInfo, rtcCandidates, dnsInfo] = await Promise.all([
+      fetchIpInfo(),
+      checkWebRTC(),
+      checkDnsLeak()
+    ]);
+    const webrtcIps = extractPublicIps(rtcCandidates);
+
+    if (lastPrivacy) {
+      if (ipInfo && ipInfo.ip !== (lastPrivacy.ipInfo ? lastPrivacy.ipInfo.ip : null)) {
+        logPrivacyEvent(`出口 IP 跳变: ${(lastPrivacy.ipInfo ? lastPrivacy.ipInfo.ip : '—')} → ${ipInfo.ip}`, 'P1');
+      }
+      if (webrtcIps.length > 0 && (lastPrivacy.webrtcIps || []).length === 0) {
+        logPrivacyEvent(`WebRTC 泄露出现: ${webrtcIps.join(', ')}`, 'P1');
+      }
+      if (webrtcIps.length === 0 && (lastPrivacy.webrtcIps || []).length > 0) {
+        logPrivacyEvent('WebRTC 泄露已修复', 'OK');
+      }
+      if (dnsInfo && dnsInfo.ok && lastPrivacy.dnsInfo && lastPrivacy.dnsInfo.ok && JSON.stringify(dnsInfo.servers) !== JSON.stringify(lastPrivacy.dnsInfo.servers)) {
+        logPrivacyEvent('DNS 服务器列表发生变化', 'P1');
+      }
+    }
+
+    lastPrivacy = {
+      ipInfo: ipInfo,
+      webrtcIps: webrtcIps,
+      dnsInfo: dnsInfo
+    };
+    renderPrivacyPanel(ipInfo, webrtcIps, dnsInfo);
+  }
+
+  runPrivacyChecks();
+  setInterval(runPrivacyChecks, 60000);
+
+  // ---------- 守护进程健康徽标（右下角）----------
+  let lastBootTs = 0;
+  function fmtUptime(ms){
+    const s = Math.max(0, Math.floor(ms/1000));
+    const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600), m = Math.floor((s%3600)/60);
+    if (d > 0) return d + '天 ' + h + 'h';
+    if (h > 0) return h + 'h ' + m + 'm';
+    return m + ' 分钟';
+  }
+  function updateProc(p){
+    const el = document.getElementById('procBadge');
+    if (!p) return;
+    document.getElementById('procUptime').textContent = fmtUptime(p.uptimeMs);
+    const boot = new Date(p.bootTs);
+    document.getElementById('procBoot').textContent = '启动 ' + boot.toLocaleString('zh-CN', { hour12:false, month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    document.getElementById('procPid').textContent = 'PID ' + p.pid;
+    if (lastBootTs && p.bootTs !== lastBootTs){
+      el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');   // 进程重启 → 闪一下提示
+    }
+    lastBootTs = p.bootTs;
+  }
+
+  async function refresh(){
+    try {
+      const r = await fetch('/api/state', { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + r.statusText);
+      const d = await r.json();
+      renderBanner(d.state);
+      renderL1(d.state.layers, d.series);
+      renderL2(d.state.layers, d.series);
+      renderL3(d.state.layers);
+      renderL3c(d.state.layers);
+      updateChart(d.series);
+      renderEvents(d.events);
+      document.getElementById('procBadge').classList.remove('down');
+      updateProc(d.proc);
+    } catch (e) {
+      console.error('[monitor] refresh failed:', e);
+      const host = window.location.host;
+      document.getElementById('banner').className = 'banner critical';
+      document.getElementById('ovBadge').textContent = '离线';
+      document.getElementById('ovMsg').textContent = '监控服务 ' + host + ' 无响应 · ' + (e && e.message ? e.message : '请检查代理/防火墙');
+      document.getElementById('l3c').innerHTML = panel({ cls:'down', title:'Claude 合规', stat:'离线', foot:'监控服务无响应' });
+      document.getElementById('procBadge').classList.add('down');
+    }
+  }
+  refresh(); setInterval(refresh, 4000);
+</script>
+</body>
+</html>

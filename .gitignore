@@ -1,0 +1,11 @@
+# 运行时生成的状态/日志（含 IP、时间戳、系统指标），不入库
+state/
+
+# 本地真实配置（含 VPS IP / 机器路径），已外置，不入库
+config.local.json
+
+# 依赖 / 系统文件
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
